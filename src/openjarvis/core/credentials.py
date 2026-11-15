@@ -40,6 +40,11 @@ TOOL_CREDENTIALS: dict[str, list[str]] = {
         "FIRECRAWL_API_KEY",
     ],
     "get_weather": ["OPENWEATHERMAP_API_KEY"],
+    "notify_user": [
+        "TWILIO_ACCOUNT_SID",
+        "TWILIO_AUTH_TOKEN",
+        "TWILIO_PHONE_NUMBER",
+    ],
     "fx_macro_data": ["FXMACRODATA_API_KEY"],
     "image_generate": ["OPENAI_API_KEY"],
     "slack": ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"],

@@ -82,6 +82,22 @@ def _format_for_sms(text: str) -> str:
     return text.strip()
 
 
+def _load_notifier() -> Any:
+    """Return the phone notifier, or None when it is not configured."""
+    try:
+        from openjarvis.notify import build_default_notifier
+
+        notifier = build_default_notifier()
+    except Exception as exc:
+        logger.debug("Notifier unavailable: %s", exc)
+        return None
+    return None if notifier.cfg.problems() else notifier
+
+
+def _twiml(xml: str) -> Response:
+    return Response(content=xml, media_type="application/xml")
+
+
 def create_webhook_router(
     bridge: Any,
     twilio_auth_token: str = "",
@@ -101,6 +117,32 @@ def create_webhook_router(
         sendblue_channel: SendBlueChannel instance for reply-back.
     """
     router = APIRouter(prefix="/webhooks", tags=["webhooks"])
+    notifier = _load_notifier()
+    if not twilio_auth_token and notifier is not None:
+        twilio_auth_token = notifier.cfg.auth_token
+
+    # ----------------------------------------------------------
+    # Twilio Voice — keypress during a Jarvis alert call
+    # ----------------------------------------------------------
+
+    @router.post("/twilio/voice")
+    async def twilio_voice(request: Request) -> Response:
+        form = await request.form()
+        params = dict(form)
+        signature = request.headers.get("X-Twilio-Signature", "")
+        if not twilio_auth_token or not _validate_twilio_signature(
+            twilio_auth_token, str(request.url), params, signature
+        ):
+            return Response("Invalid signature", status_code=403)
+        if notifier is None:
+            return _twiml("<Response><Hangup/></Response>")
+        try:
+            alert_id = int(request.query_params.get("alert_id", ""))
+        except ValueError:
+            return _twiml("<Response><Hangup/></Response>")
+        digits = str(params.get("Digits", ""))
+        xml = await asyncio.to_thread(notifier.handle_voice_digits, alert_id, digits)
+        return _twiml(xml)
 
     # ----------------------------------------------------------
     # Twilio SMS
@@ -129,6 +171,18 @@ def create_webhook_router(
                 content="<Response></Response>",
                 media_type="application/xml",
             )
+
+        # "OK 12" replies acknowledge Jarvis phone alerts.
+        if notifier is not None:
+            reply = await asyncio.to_thread(
+                notifier.handle_sms_reply, str(from_number), str(body)
+            )
+            if reply is not None:
+                from xml.sax.saxutils import escape
+
+                return _twiml(
+                    f"<Response><Message>{escape(reply)}</Message></Response>"
+                )
 
         # Use bridge or app.state.channel_bridge
         active_bridge = bridge or getattr(

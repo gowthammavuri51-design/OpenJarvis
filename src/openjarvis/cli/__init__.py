@@ -120,6 +120,7 @@ if not _DATA_BOUNDARY_BOOTSTRAP:
     from openjarvis.cli.memory_cmd import memory
     from openjarvis.cli.mine_cmd import mine
     from openjarvis.cli.model import model
+    from openjarvis.cli.notify_cmd import notify
     from openjarvis.cli.operators_cmd import operators
     from openjarvis.cli.optimize_cmd import optimize_group
     from openjarvis.cli.pearl_cmd import pearl
@@ -171,6 +172,7 @@ if not _DATA_BOUNDARY_BOOTSTRAP:
     cli.add_command(config, "config")
     cli.add_command(connect, "connect")
     cli.add_command(digest, "digest")
+    cli.add_command(notify, "notify")
 
     # Deep Research setup pulls the ingestion pipeline (embeddings/numpy). Guard
     # it so an import-time dependency failure cannot take down the whole CLI.

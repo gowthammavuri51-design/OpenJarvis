@@ -193,6 +193,7 @@ nav:
       - Memory: user-guide/memory.md
       - External MCP Servers: user-guide/mcp-external-servers.md
       - Scheduler: user-guide/scheduler.md
+      - Phone Calls & Texts: user-guide/phone-notifications.md
       - Telemetry: user-guide/telemetry.md
       - Evaluations: user-guide/evaluations.md
       - Benchmarks: user-guide/benchmarks.md
