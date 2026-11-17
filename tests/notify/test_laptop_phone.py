@@ -347,3 +347,29 @@ def test_config_nested_sections(tmp_path, monkeypatch) -> None:
     assert cfg.laptop.apps["chrome"] == "chrome"  # defaults kept
     assert cfg.phone.listen_port == 0
     assert cfg.phone.webhook_url == HOOK  # secret only from credentials/env
+
+
+def test_powershell_screenshot_fallback() -> None:
+    import re
+
+    from openjarvis.notify.laptop import _grab_screen_powershell
+
+    seen = []
+
+    def runner(argv):
+        seen.append(argv)
+        path = re.search(r"\$bmp\.Save\('([^']+)'", argv[-1]).group(1)
+        with open(path, "wb") as fh:
+            fh.write(b"\x89PNG fake")
+        return True, ""
+
+    assert _grab_screen_powershell(runner) == b"\x89PNG fake"
+    assert seen[0][:3] == ["powershell", "-NoProfile", "-NonInteractive"]
+    assert "CopyFromScreen" in seen[0][-1]
+
+
+def test_powershell_screenshot_failure_cleans_up() -> None:
+    from openjarvis.notify.laptop import _grab_screen_powershell
+
+    with pytest.raises(RuntimeError, match="blocked"):
+        _grab_screen_powershell(lambda argv: (False, "blocked"))

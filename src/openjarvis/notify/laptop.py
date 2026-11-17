@@ -265,15 +265,63 @@ def _fmt_delay(seconds: int) -> str:
 
 
 def _grab_screen() -> bytes:
+    try:
+        from PIL import ImageGrab
+    except ImportError:
+        if sys.platform == "win32":
+            return _grab_screen_powershell()
+        raise RuntimeError(
+            "screenshots need Pillow: run `uv pip install pillow`"
+        ) from None
     import io
-
-    from PIL import ImageGrab
 
     img = ImageGrab.grab(all_screens=True)
     img.thumbnail((1920, 1920))
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
     return buf.getvalue()
+
+
+# Built into Windows: no extra Python packages needed. The output path is
+# created here (never user input) and passed as a single-quoted literal.
+_PS_SCREENSHOT = """
+Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+$sig = '[DllImport("user32.dll")] ' +
+  'public static extern bool SetProcessDPIAware();'
+Add-Type -Namespace W -Name U -MemberDefinition $sig
+[W.U]::SetProcessDPIAware() | Out-Null
+$b = [System.Windows.Forms.SystemInformation]::VirtualScreen
+$bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+$g = [System.Drawing.Graphics]::FromImage($bmp)
+$g.CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size)
+$bmp.Save('{path}', [System.Drawing.Imaging.ImageFormat]::Png)
+$g.Dispose(); $bmp.Dispose()
+"""
+
+
+def _grab_screen_powershell(runner: Optional[Runner] = None) -> bytes:
+    import os
+    import tempfile
+
+    fd, path = tempfile.mkstemp(prefix="jarvis-screen-", suffix=".png")
+    os.close(fd)
+    try:
+        script = _PS_SCREENSHOT.replace("{path}", path.replace("'", "''"))
+        ok, out = (runner or _default_runner)(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script]
+        )
+        if not ok:
+            raise RuntimeError(out or "PowerShell screenshot failed")
+        with open(path, "rb") as fh:
+            data = fh.read()
+        if not data:
+            raise RuntimeError("the screenshot came out empty")
+        return data
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 def help_lines() -> List[str]:
