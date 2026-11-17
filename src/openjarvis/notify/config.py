@@ -96,6 +96,10 @@ class NotifyConfig:
     # Phone calls for high/critical alerts. With calls off, critical alerts
     # repeat as texts until acknowledged.
     calls_enabled: bool = True
+    # Answer free-form Telegram messages with the local AI, and which
+    # (safe) tools it may use there.
+    chat_with_ai: bool = True
+    chat_tools: List[str] = field(default_factory=lambda: ["set_reminder"])
     telegram_chat_id: str = ""
     monitors: MonitorConfig = field(default_factory=MonitorConfig)
 

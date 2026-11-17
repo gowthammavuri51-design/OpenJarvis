@@ -173,6 +173,26 @@ jarvis notify cancel 3
 With `set_reminder` in `[tools].enabled`, you can also just ask the
 assistant: *"remind me tomorrow at 9am to pay the electricity bill"*.
 
+## Chat and free up disk space by text
+
+Anything else you send the bot is answered by the local AI
+(`chat_with_ai = true`). From Telegram the AI may only use the tools in
+`chat_tools` that are on a safe list (reminders, web search, weather,
+calculator) — never shell commands or file access.
+
+Send **`clear space`** (or "free up some storage") and Jarvis scans for junk
+that is always safe to delete — temp files older than a day, browser
+caches, crash dumps, pip/npm/Windows Update download caches and the
+Recycle Bin — and replies with sizes. **Nothing is deleted until you reply
+`clean all` or `clean 1 3`.** Personal folders (Documents, Downloads,
+Desktop, Pictures, Videos, Music) are never cleaned; their biggest files
+are only listed so you can decide. Same from the terminal:
+
+```bash
+jarvis notify cleanup               # scan only
+jarvis notify cleanup --clean all   # scan, confirm, delete
+```
+
 ## Let the assistant reach you
 
 With `notify_user` in `[tools].enabled`, the chat assistant can contact you

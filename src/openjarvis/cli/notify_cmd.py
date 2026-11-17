@@ -151,6 +151,21 @@ def cancel(reminder_id: int) -> None:
     click.echo("Cancelled." if ok else "No pending reminder with that id.")
 
 
+@notify.command("cleanup")
+@click.option("--clean", "choice", default="", help="'all' or numbers like '1,3'.")
+def cleanup_cmd(choice: str) -> None:
+    """Find junk files that are safe to delete; delete them only if asked."""
+    n = _notifier(require_ready=False)
+    click.echo("Scanning (this can take a minute)...")
+    click.echo(n.cleanup_scan_text())
+    if not choice:
+        return
+    if not click.confirm(f"Delete the junk in '{choice}' now?", default=False):
+        click.echo("Nothing deleted.")
+        return
+    click.echo(n.cleanup_command(choice))
+
+
 @notify.command("status")
 @click.option("-n", "--limit", default=15)
 def status(limit: int) -> None:

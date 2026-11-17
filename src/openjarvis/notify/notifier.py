@@ -33,6 +33,28 @@ logger = logging.getLogger(__name__)
 
 _SMS_LIMIT = 1500
 _SPOKEN_LIMIT = 700
+# Tools the chat AI may use from Telegram. Nothing that runs commands or
+# touches files: a message (or a web page it reads) must never be able to
+# make the laptop execute something.
+_SAFE_CHAT_TOOLS = frozenset(
+    {"set_reminder", "web_search", "get_weather", "calculator", "think"}
+)
+_SPACE_RE = re.compile(
+    r"\b(clear|free|clean|make|get|need|low on)\b.*\b(space|storage|disk)\b"
+    r"|^/?(cleanup|clean up|disk|storage)$"
+)
+_CLEAN_RE = re.compile(r"^/?clean\s+(all|everything|[\d ,]+)$")
+_HELP = (
+    "Things I can do by text:\n"
+    "- remind me in 30 min to drink water\n"
+    "- remind me at 6pm to call mom\n"
+    "- remind me every day at 8am to take medicine\n"
+    "- reminders (list) / cancel 3\n"
+    "- clear space (find junk files to delete)\n"
+    "- OK 12 (acknowledge alert 12)\n"
+    "- or just ask me anything"
+)
+
 _ACK_RE = re.compile(
     r"^\s*(ok|okay|ack|yes|got it|done)\s*#?\s*(\d+)?\s*[.!]?\s*$", re.I
 )
@@ -73,6 +95,11 @@ class Notifier:
         self.gw = gateway
         self.store = store or st.AlertStore()
         self._clock = clock or (lambda: datetime.now().astimezone())
+        # Seams for tests: answer free-form chat, scan/clean disk.
+        self.ai: Optional[Callable[[str], str]] = None
+        self.cleanup_scan: Optional[Callable[[], object]] = None
+        self.cleanup_clean: Optional[Callable[[list], object]] = None
+        self._history: List[tuple[str, str]] = []
 
     # ------------------------------------------------------------------ helpers
 
@@ -333,14 +360,82 @@ class Notifier:
             when, what = parsed
             rid, desc = self._store_reminder(what, when, self._now())
             return f"OK, I'll remind you {desc}: {what} (#{rid})"
-        return (
-            "I can set reminders and track alerts. Try:\n"
-            "- remind me in 30 min to drink water\n"
-            "- remind me at 6pm to call mom\n"
-            "- remind me every day at 8am to take medicine\n"
-            "- reminders (list) / cancel 3\n"
-            "- OK 12 (acknowledge alert 12)"
+        if _CLEAN_RE.match(low):
+            return self.cleanup_command(low.split(None, 1)[1])
+        if _SPACE_RE.search(low):
+            return self.cleanup_scan_text()
+        if low in ("help", "/help"):
+            return _HELP
+        if self.cfg.chat_with_ai:
+            return self.chat(body)
+        return _HELP
+
+    # ---------------------------------------------------------------- cleanup
+
+    def cleanup_scan_text(self) -> str:
+        from openjarvis.notify import cleanup
+
+        result = (self.cleanup_scan or cleanup.scan)()
+        self.store.set_meta("cleanup_scan", result.to_json())
+        return cleanup.format_scan(result)
+
+    def cleanup_command(self, choice: str) -> str:
+        from openjarvis.notify import cleanup
+
+        raw = self.store.get_meta("cleanup_scan")
+        if not raw:
+            return "Send 'clear space' first so I can check what's safe to delete."
+        result = cleanup.ScanResult.from_json(raw)
+        if self._now().timestamp() - result.scanned_at > 30 * 60:
+            return "That scan is old. Send 'clear space' again first."
+        try:
+            picked = cleanup.select(result, choice)
+        except ValueError as exc:
+            return str(exc)
+        done = (self.cleanup_clean or cleanup.clean)(picked)
+        self.store.set_meta("cleanup_scan", "")
+        free_after = None
+        try:
+            import shutil
+
+            free_after = shutil.disk_usage(result.drive).free
+        except OSError:
+            pass
+        return cleanup.format_clean(done, free_after)
+
+    # ---------------------------------------------------------------- AI chat
+
+    def chat(self, text: str) -> str:
+        """Answer a free-form message with the local AI."""
+        history = "".join(f"User: {u}\nJarvis: {a}\n" for u, a in self._history[-4:])
+        prompt = (
+            "You are Jarvis, the user's personal assistant, replying by text "
+            "message on their phone. Answer briefly in plain text (no markdown). "
+            f"Current local time: {self._now().strftime('%A %d %B %Y, %H:%M')}.\n"
+            + (f"Recent conversation:\n{history}" if history else "")
+            + f"User: {text}\nJarvis:"
         )
+        try:
+            answer = (self.ai or self._default_ai)(prompt).strip()
+        except Exception as exc:
+            logger.warning("AI chat failed: %s", exc)
+            return (
+                "Sorry, my AI brain isn't available right now. "
+                "Is Ollama running on the laptop?"
+            )
+        answer = answer or "(no answer)"
+        self._history = (self._history + [(text, answer)])[-4:]
+        return _clip(answer, 3500)
+
+    def _default_ai(self, prompt: str) -> str:
+        if getattr(self, "_jarvis", None) is None:
+            from openjarvis.sdk import Jarvis
+
+            self._jarvis = Jarvis()
+        tools = [t for t in self.cfg.chat_tools if t in _SAFE_CHAT_TOOLS]
+        if tools:
+            return self._jarvis.ask(prompt, agent="orchestrator", tools=tools)
+        return self._jarvis.ask(prompt)
 
     def poll_telegram_replies(self) -> int:
         """Read new Telegram messages and acknowledge "OK" replies.

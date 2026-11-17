@@ -179,7 +179,9 @@ def test_telegram_reminder_conversation() -> None:
     assert _say(n, texter, "cancel 1", 3) == "Reminder #1 cancelled."
     assert _say(n, texter, "reminders", 4) == "You have no reminders."
     assert "Tell me when" in _say(n, texter, "remind me to stretch", 5)
-    assert "I can set reminders" in _say(n, texter, "hello?", 6)
+    n.ai = lambda prompt: "I am Jarvis."
+    assert _say(n, texter, "hello?", 6) == "I am Jarvis."
+    assert "Things I can do" in _say(n, texter, "help", 7)
 
 
 def test_start_and_plain_ok_get_no_reply() -> None:
