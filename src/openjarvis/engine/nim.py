@@ -7,6 +7,7 @@ import logging
 import os
 from collections.abc import AsyncIterator, Sequence
 from typing import Any, Dict, List
+from urllib.parse import urlparse
 
 import httpx
 
@@ -41,6 +42,9 @@ class NIMEngine(InferenceEngine):
 
         api_key = os.environ.get("NIM_API_KEY", "")
         self._api_key = api_key if api_key else None
+        # NVIDIA's hosted endpoint is a cloud service: requests leave the
+        # machine, so local-first fallback must never treat it as local.
+        self.is_cloud = self._is_hosted()
 
         headers = {}
         if self._api_key:
@@ -254,7 +258,16 @@ class NIMEngine(InferenceEngine):
         data = resp.json()
         return [m["id"] for m in data.get("data", [])]
 
+    def _is_hosted(self) -> bool:
+        return urlparse(self._host).hostname == urlparse(self._default_host).hostname
+
     def health(self) -> bool:
+        # The hosted endpoint answers /v1/models without credentials, which
+        # used to make NIM look "healthy" with no key and get picked as a
+        # fallback whenever the local engine was down. Without a key it
+        # cannot serve anything, so report it unavailable.
+        if self._is_hosted() and not self._api_key:
+            return False
         try:
             resp = self._client.get(
                 f"{self._api_prefix}/health/ready",

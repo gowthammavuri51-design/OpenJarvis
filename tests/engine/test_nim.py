@@ -133,3 +133,39 @@ def test_health_falls_back_to_models(respx_mock) -> None:
     assert engine.health() is True
     assert models.called
     engine.close()
+
+
+def test_hosted_endpoint_without_key_is_unavailable(respx_mock, monkeypatch) -> None:
+    """NVIDIA's hosted API must not be picked as a fallback when no key is set."""
+    monkeypatch.delenv("NIM_API_KEY", raising=False)
+    monkeypatch.delenv("NIM_HOST", raising=False)
+    models = respx_mock.get("https://integrate.api.nvidia.com/v1/models").mock(
+        return_value=httpx.Response(200, json={"data": []})
+    )
+    engine = NIMEngine()
+
+    assert engine.is_cloud is True
+    assert engine.health() is False
+    assert not models.called  # no request leaves the machine
+    engine.close()
+
+
+def test_hosted_endpoint_with_key_is_cloud(respx_mock, monkeypatch) -> None:
+    monkeypatch.setenv("NIM_API_KEY", "secret-token")
+    monkeypatch.delenv("NIM_HOST", raising=False)
+    respx_mock.get("https://integrate.api.nvidia.com/v1/health/ready").mock(
+        return_value=httpx.Response(200)
+    )
+    engine = NIMEngine()
+
+    assert engine.is_cloud is True
+    assert engine.health() is True
+    engine.close()
+
+
+def test_self_hosted_nim_is_local(monkeypatch) -> None:
+    monkeypatch.delenv("NIM_API_KEY", raising=False)
+    engine = NIMEngine(host=_HOST)
+
+    assert engine.is_cloud is False
+    engine.close()
