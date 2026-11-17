@@ -63,16 +63,23 @@ def setup() -> None:
 
 @notify.command("test")
 @click.option("--call", is_flag=True, help="Also place a test phone call.")
-def test(call: bool) -> None:
-    """Send yourself a test text (and optionally a call)."""
+@click.option("--call-only", is_flag=True, help="Only place a test call (no text).")
+def test(call: bool, call_only: bool) -> None:
+    """Send yourself a test text and/or call. Each is tried separately."""
+    from openjarvis.notify.gateway import build_call_twiml
+
     n = _notifier()
     gw = n.gw
-    try:
-        gw.send_sms(n.cfg.owner_phone, "[Jarvis] Test text: notifications work.")
-        click.echo("Test text sent.")
-        if call:
-            from openjarvis.notify.gateway import build_call_twiml
-
+    failed = False
+    if not call_only:
+        try:
+            gw.send_sms(n.cfg.owner_phone, "[Jarvis] Test text: notifications work.")
+            click.echo("Test text sent.")
+        except Exception as exc:
+            failed = True
+            click.echo(f"Text failed: {exc}", err=True)
+    if call or call_only:
+        try:
             gw.place_call(
                 n.cfg.owner_phone,
                 build_call_twiml(
@@ -82,8 +89,10 @@ def test(call: bool) -> None:
                 ),
             )
             click.echo("Test call placed.")
-    except Exception as exc:
-        click.echo(f"Failed: {exc}", err=True)
+        except Exception as exc:
+            failed = True
+            click.echo(f"Call failed: {exc}", err=True)
+    if failed:
         sys.exit(1)
 
 
