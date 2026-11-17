@@ -45,6 +45,8 @@ TOOL_CREDENTIALS: dict[str, list[str]] = {
         "TWILIO_AUTH_TOKEN",
         "TWILIO_PHONE_NUMBER",
         "TELEGRAM_BOT_TOKEN",
+        "MACRODROID_WEBHOOK_URL",
+        "PHONE_EVENT_TOKEN",
     ],
     "fx_macro_data": ["FXMACRODATA_API_KEY"],
     "image_generate": ["OPENAI_API_KEY"],
@@ -98,7 +100,9 @@ OPTIONAL_TOOL_CREDENTIALS: dict[str, frozenset[str]] = {
     # the key unlocks other currencies, full history and FX rates.
     "fx_macro_data": frozenset({"FXMACRODATA_API_KEY"}),
     # Texts can go through Telegram instead of Twilio SMS.
-    "notify_user": frozenset({"TELEGRAM_BOT_TOKEN"}),
+    "notify_user": frozenset(
+        {"TELEGRAM_BOT_TOKEN", "MACRODROID_WEBHOOK_URL", "PHONE_EVENT_TOKEN"}
+    ),
 }
 
 

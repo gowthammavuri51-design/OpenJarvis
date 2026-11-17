@@ -47,6 +47,7 @@ def tick(notifier: Notifier, ps: Optional[object] = None) -> TickReport:
 
 def run_forever(notifier: Notifier, stop: Optional[threading.Event] = None) -> None:
     stop = stop or threading.Event()
+    server = _start_phone_listener(notifier)
     interval = max(30, int(notifier.cfg.check_interval_seconds))
     # Replies and escalations need finer timing than health checks.
     step = 15
@@ -63,3 +64,19 @@ def run_forever(notifier: Notifier, stop: Optional[threading.Event] = None) -> N
             logger.exception("notify watcher tick failed")
         stop.wait(step)
         elapsed += step
+    if server is not None:
+        server.shutdown()
+
+
+def _start_phone_listener(notifier: Notifier):  # noqa: ANN202
+    phone = notifier.cfg.phone
+    if not phone.listen_port or not phone.event_token:
+        return None
+    from openjarvis.notify.phone import start_server_thread
+
+    server = start_server_thread(
+        int(phone.listen_port), phone.event_token, notifier.handle_phone_event
+    )
+    if server is not None:
+        logger.info("Listening for phone events on port %s", phone.listen_port)
+    return server

@@ -193,6 +193,51 @@ jarvis notify cleanup               # scan only
 jarvis notify cleanup --clean all   # scan, confirm, delete
 ```
 
+## Control the laptop by text
+
+A fixed list of approved actions — nothing you type is ever run as a
+command:
+
+| You send | Jarvis does |
+|---|---|
+| `lock laptop` | locks the screen |
+| `sleep laptop` | asks "yes?", then sleeps |
+| `shutdown in 30 min` / `shutdown at 11pm` / `restart` | asks "yes?", then schedules it |
+| `cancel shutdown` | cancels a scheduled shutdown/restart |
+| `open chrome` | opens apps from your list |
+| `volume up` / `volume down` / `mute` | changes the volume (Windows) |
+| `screenshot` | sends a picture of the screen to Telegram |
+| `laptop status` | battery, disk, memory, CPU, uptime |
+
+Add apps (name you type = program, path or protocol):
+
+```toml
+[notify.laptop.apps]
+spotify = "spotify:"
+vlc = "C:\\Program Files\\VideoLAN\\VLC\\vlc.exe"
+```
+
+Set `[notify.laptop] enabled = false` to turn laptop control off.
+
+## Android phone (MacroDroid)
+
+Install **MacroDroid** from the Play Store, then run
+`jarvis notify phone` on the laptop and follow it.
+
+* **Laptop → phone** (works anywhere with internet): a MacroDroid macro
+  with a *Webhook (URL)* trigger named `jarvis` receives
+  `action=ring|alarm|ringer|timer` (plus `hour`, `minute`, `mode`,
+  `seconds`). Messages: `find my phone`, `set alarm 6:30am`,
+  `silent mode` / `vibrate mode` / `normal mode`, `timer 10 min`.
+* **Phone → laptop** (same Wi-Fi only, nothing leaves your network): a
+  macro calls `http://<laptop-ip>:8765/phone?token=…&type=missed_call&from=…`
+  or `type=battery&level=…`. Missed calls create a "call back" reminder
+  (`[notify.phone] missed_call_reminder_minutes`, default 30); a low phone
+  battery sends an alert. `phone activity` lists recent events. Windows
+  may ask once to allow Python through the firewall — allow it on
+  *private* networks. Set `[notify.phone] listen_port = 0` to turn the
+  listener off.
+
 ## Let the assistant reach you
 
 With `notify_user` in `[tools].enabled`, the chat assistant can contact you

@@ -65,6 +65,12 @@ CREATE TABLE IF NOT EXISTS reminders (
     status TEXT NOT NULL DEFAULT 'pending'
 );
 CREATE INDEX IF NOT EXISTS reminders_due ON reminders(status, due_at);
+CREATE TABLE IF NOT EXISTS phone_events (
+    at REAL NOT NULL,
+    type TEXT NOT NULL,
+    data TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS phone_events_at ON phone_events(at);
 """
 
 
@@ -235,6 +241,32 @@ class AlertStore:
                 f"UPDATE reminders SET {sets} WHERE id = ?", (*fields.values(), rid)
             )
             self._db.commit()
+
+    # -- phone events -----------------------------------------------------
+
+    def add_phone_event(self, at: float, event: dict, keep_days: int = 7) -> None:
+        import json
+
+        with self._lock:
+            self._db.execute(
+                "INSERT INTO phone_events (at, type, data) VALUES (?, ?, ?)",
+                (at, event.get("type", ""), json.dumps(event)),
+            )
+            self._db.execute(
+                "DELETE FROM phone_events WHERE at < ?", (at - keep_days * 86400,)
+            )
+            self._db.commit()
+
+    def phone_events(self, limit: int = 10, since: float = 0.0) -> List[tuple]:
+        import json
+
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT at, data FROM phone_events WHERE at >= ? "
+                "ORDER BY at DESC LIMIT ?",
+                (since, limit),
+            ).fetchall()
+        return [(at, json.loads(data)) for at, data in rows]
 
     # -- meta -------------------------------------------------------------
 

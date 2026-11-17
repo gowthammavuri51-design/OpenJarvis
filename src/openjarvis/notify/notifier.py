@@ -18,6 +18,7 @@ and sent together later. Repeats of the same ``dedupe_key`` within
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass
@@ -51,9 +52,19 @@ _HELP = (
     "- remind me every day at 8am to take medicine\n"
     "- reminders (list) / cancel 3\n"
     "- clear space (find junk files to delete)\n"
-    "- OK 12 (acknowledge alert 12)\n"
-    "- or just ask me anything"
+    "- OK 12 (acknowledge alert 12)"
 )
+
+
+def _help() -> str:
+    from openjarvis.notify.laptop import help_lines
+
+    phone = [
+        "- find my phone / set alarm 6:30am / timer 10 min",
+        "- silent mode / normal mode / phone activity",
+    ]
+    return "\n".join([_HELP, *help_lines(), *phone, "- or just ask me anything"])
+
 
 _ACK_RE = re.compile(
     r"^\s*(ok|okay|ack|yes|got it|done)\s*#?\s*(\d+)?\s*[.!]?\s*$", re.I
@@ -100,6 +111,8 @@ class Notifier:
         self.cleanup_scan: Optional[Callable[[], object]] = None
         self.cleanup_clean: Optional[Callable[[list], object]] = None
         self._history: List[tuple[str, str]] = []
+        self.laptop = None  # LaptopControl, created on first use
+        self.phone_link = None  # PhoneLink, created on first use
 
     # ------------------------------------------------------------------ helpers
 
@@ -335,6 +348,9 @@ class Notifier:
         if ack:
             return ack
         low = body.lower().rstrip(".!?")
+        confirmed = self._handle_confirmation(low)
+        if confirmed is not None:
+            return confirmed
         if low in ("/start", "ok", "okay", "thanks", "thank you"):
             return None
         if low in ("reminders", "/reminders", "list", "my reminders"):
@@ -365,10 +381,148 @@ class Notifier:
         if _SPACE_RE.search(low):
             return self.cleanup_scan_text()
         if low in ("help", "/help"):
-            return _HELP
+            return _help()
+        if low in ("phone activity", "phone", "missed calls", "/phone"):
+            return self.phone_activity_text()
+        laptop_reply = self._laptop_command(body)
+        if laptop_reply is not None:
+            return laptop_reply
+        phone_reply = self._phone_command(low)
+        if phone_reply is not None:
+            return phone_reply
         if self.cfg.chat_with_ai:
             return self.chat(body)
-        return _HELP
+        return _help()
+
+    # ---------------------------------------------------------------- laptop
+
+    def _get_laptop(self):
+        if self.laptop is None:
+            from openjarvis.notify.laptop import LaptopControl
+
+            self.laptop = LaptopControl(apps=dict(self.cfg.laptop.apps))
+        return self.laptop
+
+    def _laptop_command(self, body: str) -> Optional[str]:
+        if not self.cfg.laptop.enabled:
+            return None
+        plan = self._get_laptop().parse(body)
+        if plan is None:
+            return None
+        if plan.confirm:
+            expires = self._now().timestamp() + 120
+            self.store.set_meta(
+                "pending_confirm", json.dumps({"text": body, "expires": expires})
+            )
+            return (
+                f"Are you sure you want to {plan.describe}? "
+                "Reply 'yes' within 2 minutes."
+            )
+        return self._run_plan(plan)
+
+    def _run_plan(self, plan) -> Optional[str]:
+        outcome = plan.run()
+        if outcome.image is not None:
+            texter = getattr(self.gw, "texter", None)
+            if texter is None or not hasattr(texter, "send_photo"):
+                return "Screenshots can only be sent through Telegram."
+            try:
+                texter.send_photo(outcome.image, caption=outcome.text)
+            except Exception as exc:
+                return f"Couldn't send the screenshot: {exc}"
+            return None
+        return outcome.text
+
+    def _handle_confirmation(self, low: str) -> Optional[str]:
+        raw = self.store.get_meta("pending_confirm")
+        if not raw:
+            return None
+        yes = low in ("yes", "y", "yes do it", "confirm", "do it", "sure")
+        no = low in ("no", "n", "nope", "don't", "dont", "stop")
+        if not (yes or no):
+            return None
+        self.store.set_meta("pending_confirm", "")
+        pending = json.loads(raw)
+        if no:
+            return "OK, I won't do it."
+        if self._now().timestamp() > float(pending.get("expires", 0)):
+            return "That request expired. Send the command again."
+        plan = self._get_laptop().parse(pending.get("text", ""))
+        if plan is None:
+            return "Sorry, I lost track of that request. Send it again."
+        return self._run_plan(plan)
+
+    # ---------------------------------------------------------------- phone
+
+    def _get_phone(self):
+        if self.phone_link is None:
+            from openjarvis.notify.phone import PhoneLink, valid_webhook
+
+            if not valid_webhook(self.cfg.phone.webhook_url):
+                return None
+            self.phone_link = PhoneLink(self.cfg.phone.webhook_url)
+        return self.phone_link
+
+    def _phone_command(self, low: str) -> Optional[str]:
+        from openjarvis.notify.phone import parse_phone_command
+
+        parsed = parse_phone_command(low)
+        if parsed is None:
+            return None
+        params, done = parsed
+        if params.get("action") == "error":
+            return done
+        link = self._get_phone()
+        if link is None:
+            return "Your phone isn't linked yet. On the laptop run: jarvis notify phone"
+        try:
+            link.send(params)
+        except Exception as exc:
+            return f"Couldn't reach your phone: {exc}"
+        return done
+
+    def handle_phone_event(self, event: dict) -> None:
+        """React to an event sent by the phone (missed call, battery, ...)."""
+        from openjarvis.notify.phone import battery_low
+
+        now = self._now()
+        self.store.add_phone_event(now.timestamp(), event, self.cfg.phone.keep_days)
+        etype = event.get("type")
+        if etype == "battery" and battery_low(event, self.cfg.phone.battery_percent):
+            self.notify(
+                "Phone battery low",
+                f"Your phone is at {event.get('level')}% and not charging.",
+                urgency="normal",
+                dedupe_key="phone:battery",
+            )
+        elif etype == "missed_call":
+            who = event.get("from") or "an unknown number"
+            minutes = int(self.cfg.phone.missed_call_reminder_minutes or 0)
+            if minutes > 0:
+                from openjarvis.notify.reminders import parse_when
+
+                when = parse_when(f"in {minutes} min", now)
+                self._store_reminder(
+                    f"Call back {who} (missed call at {now.strftime('%H:%M')})",
+                    when,
+                    now,
+                )
+
+    def phone_activity_text(self) -> str:
+        from openjarvis.notify.phone import describe_event
+
+        events = self.store.phone_events(limit=10)
+        if not events:
+            return (
+                "No phone activity yet. Make sure the phone link is set up "
+                "(jarvis notify phone) and the phone is on the same Wi-Fi."
+            )
+        tz = self._now().tzinfo
+        lines = ["Recent phone activity:"]
+        for at, e in events:
+            when = datetime.fromtimestamp(at, tz=tz).strftime("%a %H:%M")
+            lines.append(f"- {when} {describe_event(e)}")
+        return "\n".join(lines)
 
     # ---------------------------------------------------------------- cleanup
 

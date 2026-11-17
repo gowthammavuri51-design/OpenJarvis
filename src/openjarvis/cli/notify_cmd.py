@@ -318,3 +318,55 @@ def telegram(wait: int) -> None:
     store.set_meta("telegram_offset", str(last_update))
     store.close()
     click.echo("Linked! Check Telegram for a message from Jarvis.")
+
+
+@notify.command("phone")
+@click.option("--test", "do_test", is_flag=True, help="Ring the phone to test.")
+def phone(do_test: bool) -> None:
+    """Link your Android phone (MacroDroid) to Jarvis."""
+    from openjarvis.core.credentials import save_credential
+    from openjarvis.notify.config import load_notify_config
+    from openjarvis.notify.phone import PhoneLink, local_ip, new_token, valid_webhook
+
+    cfg = load_notify_config()
+    url = cfg.phone.webhook_url
+    if not valid_webhook(url):
+        click.echo(
+            "In MacroDroid, add a macro with the 'Webhook (URL)' trigger and "
+            "the identifier 'jarvis'. Copy the URL it shows, e.g.\n"
+            "  https://trigger.macrodroid.com/abcd-1234/jarvis\n"
+        )
+        url = click.prompt("Paste the webhook URL").strip()
+        if url.endswith("/jarvis"):
+            url = url[: -len("/jarvis")]
+        url = url.split("?")[0].rstrip("/")
+        if not valid_webhook(url):
+            click.echo("That doesn't look like a MacroDroid webhook URL.", err=True)
+            sys.exit(1)
+        save_credential("notify_user", "MACRODROID_WEBHOOK_URL", url)
+        click.echo("Phone webhook saved.")
+
+    token = cfg.phone.event_token
+    if not token:
+        token = new_token()
+        save_credential("notify_user", "PHONE_EVENT_TOKEN", token)
+
+    port = cfg.phone.listen_port
+    if port:
+        base = f"http://{local_ip()}:{port}/phone?token={token}"
+        click.echo("\nFor phone -> laptop events, use these URLs in MacroDroid")
+        click.echo("(phone and laptop must be on the same Wi-Fi):\n")
+        click.echo(f"  Missed call:  {base}&type=missed_call&from=<caller>")
+        click.echo(f"  Battery:      {base}&type=battery&level=<battery level>")
+        click.echo(f"  Test:         {base}&type=ping")
+        click.echo(
+            "\nKeep these private: the token lets the phone talk to Jarvis.\n"
+            "Restart the watcher after setup so it starts listening."
+        )
+    if do_test:
+        try:
+            PhoneLink(url).send({"action": "ring"})
+            click.echo("\nSent 'ring' to your phone.")
+        except Exception as exc:
+            click.echo(f"\nCouldn't reach the phone: {exc}", err=True)
+            sys.exit(1)

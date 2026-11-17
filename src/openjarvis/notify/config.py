@@ -32,10 +32,10 @@ Twilio trial SMS or international SMS is blocked): set
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, is_dataclass
 from datetime import time
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     import tomllib  # Python 3.11+
@@ -78,6 +78,32 @@ class MonitorConfig:
     watch_processes: List[str] = field(default_factory=list)
 
 
+def _default_apps() -> Dict[str, str]:
+    from openjarvis.notify.laptop import DEFAULT_APPS
+
+    return dict(DEFAULT_APPS)
+
+
+@dataclass
+class LaptopConfig:
+    enabled: bool = True
+    # name you type -> program, path or protocol (e.g. "spotify" = "spotify:")
+    apps: Dict[str, str] = field(default_factory=_default_apps)
+
+
+@dataclass
+class PhoneConfig:
+    # Port for phone events over home Wi-Fi (0 turns the listener off).
+    listen_port: int = 8765
+    battery_percent: float = 15.0
+    # Remind you to call back this many minutes after a missed call (0 = off).
+    missed_call_reminder_minutes: int = 30
+    keep_days: int = 7
+    # Secrets (credentials.toml): MACRODROID_WEBHOOK_URL, PHONE_EVENT_TOKEN.
+    webhook_url: str = field(default="", repr=False)
+    event_token: str = field(default="", repr=False)
+
+
 @dataclass
 class NotifyConfig:
     owner_phone: str = ""
@@ -102,6 +128,8 @@ class NotifyConfig:
     chat_tools: List[str] = field(default_factory=lambda: ["set_reminder"])
     telegram_chat_id: str = ""
     monitors: MonitorConfig = field(default_factory=MonitorConfig)
+    laptop: LaptopConfig = field(default_factory=LaptopConfig)
+    phone: PhoneConfig = field(default_factory=PhoneConfig)
 
     # Secrets — never written back to config.toml.
     account_sid: str = field(default="", repr=False)
@@ -170,14 +198,25 @@ class NotifyConfig:
         return out
 
 
-_SECRET_FIELDS = ("account_sid", "auth_token", "telegram_token")
+_SECRET_FIELDS = (
+    "account_sid",
+    "auth_token",
+    "telegram_token",
+    "webhook_url",
+    "event_token",
+)
 
 
 def _apply(obj: Any, data: dict) -> None:
     for key, value in data.items():
-        if key == "monitors" and isinstance(value, dict):
-            _apply(obj.monitors, value)
-        elif hasattr(obj, key) and key not in _SECRET_FIELDS:
+        if not hasattr(obj, key) or key in _SECRET_FIELDS:
+            continue
+        current = getattr(obj, key)
+        if isinstance(value, dict) and is_dataclass(current):
+            _apply(current, value)
+        elif isinstance(value, dict) and isinstance(current, dict):
+            current.update({str(k): str(v) for k, v in value.items()})
+        else:
             setattr(obj, key, value)
 
 
@@ -205,6 +244,8 @@ def load_notify_config(config_path: Optional[Path] = None) -> NotifyConfig:
     cfg.auth_token = cred("TWILIO_AUTH_TOKEN")
     cfg.from_phone = cred("TWILIO_PHONE_NUMBER")
     cfg.telegram_token = cred("TELEGRAM_BOT_TOKEN")
+    cfg.phone.webhook_url = cred("MACRODROID_WEBHOOK_URL")
+    cfg.phone.event_token = cred("PHONE_EVENT_TOKEN")
     cfg.telegram_chat_id = str(cfg.telegram_chat_id or "").strip()
     cfg.public_url = (cfg.public_url or "").rstrip("/")
     return cfg

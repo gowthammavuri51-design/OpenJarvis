@@ -118,6 +118,25 @@ class TelegramTexter:
         result = self._call("sendMessage", chat_id=self.chat_id, text=body)
         return str((result or {}).get("message_id", ""))
 
+    def send_photo(self, png: bytes, caption: str = "") -> str:
+        url = f"{_TELEGRAM_API}/bot{self._token}/sendPhoto"
+        try:
+            resp = self._http().post(
+                url,
+                data={"chat_id": self.chat_id, "caption": caption[:1000]},
+                files={"photo": ("screen.png", png, "image/png")},
+                timeout=60.0,
+            )
+            data = resp.json()
+        except Exception as exc:
+            raise TelegramError(
+                self._scrub(f"Telegram sendPhoto failed: {exc}")
+            ) from None
+        if not data.get("ok"):
+            desc = data.get("description") or f"HTTP {resp.status_code}"
+            raise TelegramError(self._scrub(f"Telegram sendPhoto failed: {desc}"))
+        return str((data.get("result") or {}).get("message_id", ""))
+
     def get_updates(self, offset: int = 0, timeout: int = 0) -> list:
         return self._call("getUpdates", offset=offset, timeout=timeout) or []
 
