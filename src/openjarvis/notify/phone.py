@@ -49,6 +49,17 @@ def valid_webhook(url: str) -> bool:
     )
 
 
+def webhook_full_url(url: str) -> str:
+    """The URL to call: as pasted (any identifier, any case).
+
+    A bare ``.../<device-id>`` gets the default ``/jarvis`` identifier.
+    """
+    parts = urlsplit((url or "").strip())
+    segments = [seg for seg in parts.path.split("/") if seg]
+    base = f"{parts.scheme}://{parts.netloc}/" + "/".join(segments)
+    return base if len(segments) >= 2 else f"{base}/{WEBHOOK_NAME}"
+
+
 def _to_24h(h: str, m: Optional[str], ampm: Optional[str]) -> Tuple[int, int]:
     hour, minute = int(h), int(m or 0)
     if ampm:
@@ -95,7 +106,7 @@ class PhoneLink:
     """Send commands to the phone through its MacroDroid webhook."""
 
     def __init__(self, webhook_url: str, client: Any = None) -> None:
-        self._base = webhook_url.rstrip("/")
+        self._url = webhook_full_url(webhook_url)
         self._client = client
 
     def _http(self) -> Any:
@@ -106,7 +117,7 @@ class PhoneLink:
         return self._client
 
     def send(self, params: Dict[str, str]) -> None:
-        url = f"{self._base}/{WEBHOOK_NAME}?{urlencode(params)}"
+        url = f"{self._url}?{urlencode(params)}"
         try:
             resp = self._http().get(url)
         except Exception as exc:

@@ -373,3 +373,15 @@ def test_powershell_screenshot_failure_cleans_up() -> None:
 
     with pytest.raises(RuntimeError, match="blocked"):
         _grab_screen_powershell(lambda argv: (False, "blocked"))
+
+
+def test_webhook_url_keeps_pasted_identifier(respx_mock) -> None:
+    from openjarvis.notify.phone import webhook_full_url
+
+    assert webhook_full_url(HOOK) == f"{HOOK}/jarvis"
+    assert webhook_full_url(f"{HOOK}/Jarvis/") == f"{HOOK}/Jarvis"
+    route = respx_mock.get(url__startswith=f"{HOOK}/Jarvis?").mock(
+        return_value=httpx.Response(200)
+    )
+    PhoneLink(f"{HOOK}/Jarvis", client=httpx.Client()).send({"action": "ring"})
+    assert route.called

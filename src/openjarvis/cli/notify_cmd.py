@@ -337,8 +337,6 @@ def phone(do_test: bool) -> None:
             "  https://trigger.macrodroid.com/abcd-1234/jarvis\n"
         )
         url = click.prompt("Paste the webhook URL").strip()
-        if url.endswith("/jarvis"):
-            url = url[: -len("/jarvis")]
         url = url.split("?")[0].rstrip("/")
         if not valid_webhook(url):
             click.echo("That doesn't look like a MacroDroid webhook URL.", err=True)
