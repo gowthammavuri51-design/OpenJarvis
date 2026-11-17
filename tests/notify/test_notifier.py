@@ -393,3 +393,42 @@ def test_notify_tool_not_configured() -> None:
     res = NotifyUserTool(notifier=n).execute(title="x", urgency="normal")
     assert not res.success
     assert "not set up" in res.content
+
+
+class CallFailsGateway(FakeGateway):
+    def place_call(self, to: str, twiml: str) -> str:
+        raise RuntimeError("trial accounts have limited parameter access")
+
+
+def test_failed_calls_fall_back_to_texts_and_stay_bounded() -> None:
+    cfg = NotifyConfig(
+        owner_phone=OWNER,
+        public_url="https://jarvis.example.com",
+        account_sid="AC1",
+        auth_token="tok",
+        from_phone="+15559998888",
+        escalate_after_minutes=10,
+        max_call_attempts=3,
+    )
+    gw = CallFailsGateway()
+    clock = Clock()
+    n = Notifier(cfg, gw, st.AlertStore(":memory:"), clock)
+    r = n.notify("Fire", "Kitchen", urgency="critical")
+    assert r.action == "texted"
+    assert n.store.get(r.alert_id).calls == 1
+    clock.advance(minutes=5)
+    n.process_escalations()
+    assert len(gw.sms) == 1  # waits between attempts even when calls fail
+    clock.advance(minutes=6)
+    n.process_escalations()
+    assert "URGENT (call failed): Fire" in gw.sms[-1][1]
+    clock.advance(minutes=11)
+    n.process_escalations()
+    clock.advance(minutes=11)
+    n.process_escalations()  # max attempts reached -> give up with a final text
+    assert n.store.get(r.alert_id).status == st.DONE
+    assert "couldn't reach you" in gw.sms[-1][1]
+    count = len(gw.sms)
+    clock.advance(hours=2)
+    n.process_escalations()
+    assert len(gw.sms) == count

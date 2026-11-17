@@ -120,13 +120,15 @@ class Notifier:
             language=self.cfg.voice_language,
             gather_url=gather_url,
         )
+        # Count the attempt even if it fails, so retries stay spaced out and
+        # bounded by max_call_attempts.
+        self.store.update(alert.id, calls=alert.calls + 1, last_call_at=ts)
         try:
             self.gw.place_call(self.cfg.owner_phone, twiml)
         except Exception as exc:
             logger.error("Notify call failed: %s", exc)
             return False
         self.store.log_contact(ts, "call", alert.urgency == "critical")
-        self.store.update(alert.id, calls=alert.calls + 1, last_call_at=ts)
         return True
 
     # ------------------------------------------------------------------ public
@@ -295,8 +297,20 @@ class Notifier:
                     True,
                 )
                 continue
-            if now - a.last_call_at >= wait and self._call(a, now, retry=True):
+            if now - a.last_call_at < wait:
+                continue
+            if self._call(a, now, retry=True):
                 recalled.append(a.id)
+            else:
+                # The phone call could not be placed: repeat the text instead,
+                # so a critical alert is never silently dropped.
+                self._sms(
+                    f"[Jarvis] URGENT (call failed): {a.title}"
+                    + (f"\n{a.message}" if a.message else "")
+                    + f"\nReply OK {a.id} to acknowledge.",
+                    now,
+                    True,
+                )
         return recalled
 
     def flush_held(self) -> int:
