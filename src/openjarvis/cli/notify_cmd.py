@@ -43,6 +43,11 @@ def setup() -> None:
     click.echo(f"Twilio keys:   {keys}")
     click.echo(f"Public URL:    {url}")
     click.echo(f"Quiet hours:   {cfg.quiet_hours or '(off)'}")
+    if cfg.texts_via == "telegram":
+        chat = cfg.telegram_chat_id or "(not linked)"
+        click.echo(f"Texts via:     Telegram (chat {chat})")
+    else:
+        click.echo("Texts via:     SMS (run `jarvis notify telegram` to use Telegram)")
     click.echo("")
     if not problems:
         click.echo("Ready. Try: jarvis notify test")
@@ -74,7 +79,7 @@ def test(call: bool, call_only: bool) -> None:
     if not call_only:
         try:
             gw.send_sms(n.cfg.owner_phone, "[Jarvis] Test text: notifications work.")
-            click.echo("Test text sent.")
+            click.echo(f"Test text sent via {n.cfg.texts_via}.")
         except Exception as exc:
             failed = True
             click.echo(f"Text failed: {exc}", err=True)
@@ -176,3 +181,90 @@ def watch(once: bool) -> None:
         watcher.run_forever(n)
     except KeyboardInterrupt:
         click.echo("Stopped.")
+
+
+def _save_chat_id(chat_id: str) -> None:
+    """Write [notify].telegram_chat_id into config.toml, keeping its layout."""
+    import tomlkit
+
+    from openjarvis.core.paths import get_config_path
+
+    path = get_config_path()
+    text = path.read_text(encoding="utf-8-sig") if path.exists() else ""
+    doc = tomlkit.parse(text)
+    if "notify" not in doc:
+        doc["notify"] = tomlkit.table()
+    doc["notify"]["telegram_chat_id"] = str(chat_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+
+
+@notify.command("telegram")
+@click.option("--wait", default=180, help="Seconds to wait for your first message.")
+def telegram(wait: int) -> None:
+    """Link a Telegram bot so Jarvis's texts arrive in Telegram."""
+    import time
+
+    from openjarvis.core.credentials import save_credential
+    from openjarvis.notify.config import load_notify_config
+    from openjarvis.notify.gateway import TelegramError, TelegramTexter
+
+    cfg = load_notify_config()
+    token = cfg.telegram_token
+    if not token:
+        click.echo(
+            "1. In Telegram, open @BotFather, send /newbot and follow the steps.\n"
+            "2. BotFather replies with a token like 123456:ABC-DEF...\n"
+        )
+        token = click.prompt(
+            "Paste the bot token (it stays hidden)", hide_input=True
+        ).strip()
+
+    probe = TelegramTexter(token, "")
+    try:
+        username = probe.bot_username()
+    except TelegramError as exc:
+        click.echo(f"That token did not work: {exc}", err=True)
+        sys.exit(1)
+    if token != cfg.telegram_token:
+        save_credential("notify_user", "TELEGRAM_BOT_TOKEN", token)
+        click.echo("Bot token saved.")
+
+    click.echo(
+        f"\nNow open Telegram, search for @{username}, open it and press START "
+        "(or send it any message)."
+    )
+    click.echo(f"Waiting up to {wait} seconds...")
+    deadline = time.monotonic() + wait
+    chat_id = ""
+    last_update = 0
+    while time.monotonic() < deadline and not chat_id:
+        try:
+            updates = probe.get_updates(offset=last_update, timeout=0)
+        except TelegramError as exc:
+            click.echo(f"Could not read messages: {exc}", err=True)
+            sys.exit(1)
+        for upd in updates:
+            last_update = max(last_update, int(upd.get("update_id", 0)) + 1)
+            chat = (upd.get("message") or {}).get("chat") or {}
+            if chat.get("type") == "private" and chat.get("id") is not None:
+                chat_id = str(chat["id"])
+        if not chat_id:
+            time.sleep(2)
+    if not chat_id:
+        click.echo("No message arrived. Run `jarvis notify telegram` again.", err=True)
+        sys.exit(1)
+
+    _save_chat_id(chat_id)
+    texter = TelegramTexter(token, chat_id)
+    texter.send_text(
+        "Jarvis is connected. Your alerts will arrive here. "
+        "Reply OK to an alert to acknowledge it."
+    )
+    # Don't treat the START message as a reply later.
+    from openjarvis.notify.store import AlertStore
+
+    store = AlertStore()
+    store.set_meta("telegram_offset", str(last_update))
+    store.close()
+    click.echo("Linked! Check Telegram for a message from Jarvis.")

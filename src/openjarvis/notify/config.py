@@ -22,6 +22,11 @@ Example::
 Twilio credentials are secrets and are read from ``credentials.toml`` (tool
 ``notify_user``) or the environment: ``TWILIO_ACCOUNT_SID``,
 ``TWILIO_AUTH_TOKEN``, ``TWILIO_PHONE_NUMBER``.
+
+Texts can go through a Telegram bot instead of SMS (free, and works where
+Twilio trial SMS or international SMS is blocked): set
+``TELEGRAM_BOT_TOKEN`` in the same place and ``telegram_chat_id`` under
+``[notify]`` (``jarvis notify telegram`` finds it for you).
 """
 
 from __future__ import annotations
@@ -85,12 +90,33 @@ class NotifyConfig:
     check_interval_seconds: int = 300
     dedupe_hours: float = 6.0
     voice_language: str = "en-US"
+    # Where text messages go: "sms" (Twilio), "telegram", or "auto"
+    # (Telegram when a bot token and chat id are configured, else SMS).
+    text_channel: str = "auto"
+    telegram_chat_id: str = ""
     monitors: MonitorConfig = field(default_factory=MonitorConfig)
 
     # Secrets — never written back to config.toml.
     account_sid: str = field(default="", repr=False)
     auth_token: str = field(default="", repr=False)
     from_phone: str = ""
+    telegram_token: str = field(default="", repr=False)
+
+    @property
+    def telegram_ready(self) -> bool:
+        return bool(self.telegram_token and str(self.telegram_chat_id).strip())
+
+    @property
+    def texts_via(self) -> str:
+        channel = (self.text_channel or "auto").strip().lower()
+        if channel == "auto":
+            return "telegram" if self.telegram_ready else "sms"
+        return channel
+
+    @property
+    def can_receive_replies(self) -> bool:
+        """Whether the owner can acknowledge alerts from their phone."""
+        return self.can_receive_webhooks or self.texts_via == "telegram"
 
     @property
     def quiet_window(self) -> Optional[Tuple[time, time]]:
@@ -116,6 +142,15 @@ class NotifyConfig:
             out.append("Twilio TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN not set")
         if not is_valid_phone(self.from_phone):
             out.append("Twilio TWILIO_PHONE_NUMBER is missing or invalid")
+        if self.texts_via not in ("sms", "telegram"):
+            out.append("[notify].text_channel must be 'sms', 'telegram' or 'auto'")
+        elif self.texts_via == "telegram":
+            if not self.telegram_token:
+                out.append("TELEGRAM_BOT_TOKEN not set (see `jarvis notify telegram`)")
+            if not str(self.telegram_chat_id).strip():
+                out.append(
+                    "[notify].telegram_chat_id not set (run `jarvis notify telegram`)"
+                )
         for name, fn in (
             ("quiet_hours", lambda: self.quiet_window),
             ("digest_time", lambda: self.digest_at),
@@ -127,11 +162,14 @@ class NotifyConfig:
         return out
 
 
+_SECRET_FIELDS = ("account_sid", "auth_token", "telegram_token")
+
+
 def _apply(obj: Any, data: dict) -> None:
     for key, value in data.items():
         if key == "monitors" and isinstance(value, dict):
             _apply(obj.monitors, value)
-        elif hasattr(obj, key) and key not in ("account_sid", "auth_token"):
+        elif hasattr(obj, key) and key not in _SECRET_FIELDS:
             setattr(obj, key, value)
 
 
@@ -158,5 +196,7 @@ def load_notify_config(config_path: Optional[Path] = None) -> NotifyConfig:
     cfg.account_sid = cred("TWILIO_ACCOUNT_SID")
     cfg.auth_token = cred("TWILIO_AUTH_TOKEN")
     cfg.from_phone = cred("TWILIO_PHONE_NUMBER")
+    cfg.telegram_token = cred("TELEGRAM_BOT_TOKEN")
+    cfg.telegram_chat_id = str(cfg.telegram_chat_id or "").strip()
     cfg.public_url = (cfg.public_url or "").rstrip("/")
     return cfg

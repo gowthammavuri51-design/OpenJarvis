@@ -77,12 +77,29 @@ enabled = ["notify_user", "shell_exec", "file_read", "web_search"]
 
 Install the Twilio library: `uv sync --extra channel-twilio`.
 
+### 3b. (Recommended outside the US) Texts via Telegram
+
+Twilio **trial** accounts can only send Twilio's own SMS templates
+(error 572006), and many countries (e.g. India) block SMS from foreign
+numbers. Telegram avoids both, is free, and lets you reply **OK** to
+acknowledge alerts without any public URL. Calls still go through Twilio.
+
+```bash
+jarvis notify telegram
+```
+
+It asks for a bot token (create a bot with **@BotFather** → `/newbot`),
+then waits while you open your new bot in Telegram and press **Start**.
+The token is saved to `credentials.toml` and your chat id to
+`[notify].telegram_chat_id`. Set `text_channel = "sms"` under `[notify]`
+to go back to SMS.
+
 ### 4. Test it
 
 ```bash
 jarvis notify setup        # shows what is still missing
 jarvis notify test         # sends a test text
-jarvis notify test --call  # text + test phone call
+jarvis notify test --call  # text + test phone call (each tried separately)
 jarvis notify send "Hello" -m "From the CLI" -u high
 jarvis notify status       # recent alerts
 ```

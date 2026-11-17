@@ -108,10 +108,17 @@ class Notifier:
             f"{intro} with a {alert.urgency} alert. {alert.title}. {alert.message}",
             _SPOKEN_LIMIT,
         )
+        gather_url = self._gather_url(alert.id)
+        if (
+            alert.urgency == "critical"
+            and gather_url is None
+            and self.cfg.texts_via == "telegram"
+        ):
+            spoken += " To stop these calls, reply OK to my Telegram message."
         twiml = build_call_twiml(
             spoken,
             language=self.cfg.voice_language,
-            gather_url=self._gather_url(alert.id),
+            gather_url=gather_url,
         )
         try:
             self.gw.place_call(self.cfg.owner_phone, twiml)
@@ -170,7 +177,7 @@ class Notifier:
                 return NotifyResult("held", add(st.HELD).id, "hourly limit reached")
 
         wants_call = critical or (urgency == "high" and not quiet)
-        expects_ack = urgency in ("high", "critical") and self.cfg.can_receive_webhooks
+        expects_ack = urgency in ("high", "critical") and self.cfg.can_receive_replies
         alert = add(st.SENT if expects_ack else st.DONE)
 
         body = f"[Jarvis] {title}" + (f"\n{message}" if message else "")
@@ -201,6 +208,10 @@ class Notifier:
         """
         if from_number != self.cfg.owner_phone:
             return None
+        return self.handle_ack_text(body)
+
+    def handle_ack_text(self, body: str) -> Optional[str]:
+        """Acknowledge alerts from an already-verified owner message."""
         m = _ACK_RE.match(body or "")
         if not m:
             return None
@@ -217,6 +228,34 @@ class Notifier:
         for a in open_alerts:
             self.ack(a.id)
         return f"Acknowledged {len(open_alerts)} alert(s)."
+
+    def poll_telegram_replies(self) -> int:
+        """Read new Telegram messages and acknowledge "OK" replies.
+
+        Only messages from the configured owner chat are considered. Returns
+        the number of replies handled.
+        """
+        texter = getattr(self.gw, "texter", None)
+        if texter is None:
+            return 0
+        offset = int(self.store.get_meta("telegram_offset") or 0)
+        updates = texter.get_updates(offset=offset, timeout=0)
+        handled = 0
+        for upd in updates:
+            offset = max(offset, int(upd.get("update_id", 0)) + 1)
+            msg = upd.get("message") or {}
+            chat_id = str((msg.get("chat") or {}).get("id", ""))
+            if chat_id != texter.chat_id:
+                continue
+            reply = self.handle_ack_text(str(msg.get("text") or ""))
+            if reply:
+                handled += 1
+                try:
+                    texter.send_text(reply)
+                except Exception as exc:
+                    logger.warning("Telegram reply failed: %s", exc)
+        self.store.set_meta("telegram_offset", str(offset))
+        return handled
 
     def handle_voice_digits(self, alert_id: int, digits: str) -> str:
         """Return TwiML for a keypress during a Jarvis call."""
@@ -314,8 +353,10 @@ class Notifier:
 def build_default_notifier(config: Optional[NotifyConfig] = None) -> Notifier:
     """Create a notifier from config.toml + credentials."""
     from openjarvis.notify.config import load_notify_config
-    from openjarvis.notify.gateway import TwilioGateway
+    from openjarvis.notify.gateway import SplitGateway, TelegramTexter, TwilioGateway
 
     cfg = config or load_notify_config()
-    gw = TwilioGateway(cfg.account_sid, cfg.auth_token, cfg.from_phone)
+    gw: Gateway = TwilioGateway(cfg.account_sid, cfg.auth_token, cfg.from_phone)
+    if cfg.texts_via == "telegram" and cfg.telegram_ready:
+        gw = SplitGateway(TelegramTexter(cfg.telegram_token, cfg.telegram_chat_id), gw)
     return Notifier(cfg, gw)

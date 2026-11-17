@@ -69,3 +69,72 @@ def build_call_twiml(
         return f"<Response>{gather}{say}<Say language={lang}>Goodbye.</Say></Response>"
     pause = '<Pause length="1"/>'
     return f"<Response>{say}{pause}{say}</Response>"
+
+
+_TELEGRAM_API = "https://api.telegram.org"
+
+
+class TelegramError(RuntimeError):
+    pass
+
+
+class TelegramTexter:
+    """Send texts to (and read replies from) the owner's Telegram chat.
+
+    The bot token is part of every Telegram API URL, so it is scrubbed from
+    any error before it can reach logs or the terminal.
+    """
+
+    def __init__(self, token: str, chat_id: str, client: Any = None) -> None:
+        self._token = token
+        self.chat_id = str(chat_id).strip()
+        self._client = client
+
+    def _http(self) -> Any:
+        if self._client is None:
+            import httpx
+
+            self._client = httpx.Client(timeout=15.0)
+        return self._client
+
+    def _scrub(self, text: str) -> str:
+        return text.replace(self._token, "<token>") if self._token else text
+
+    def _call(self, method: str, **payload: Any) -> Any:
+        url = f"{_TELEGRAM_API}/bot{self._token}/{method}"
+        try:
+            resp = self._http().post(url, json=payload)
+            data = resp.json()
+        except Exception as exc:
+            raise TelegramError(
+                self._scrub(f"Telegram {method} failed: {exc}")
+            ) from None
+        if not data.get("ok"):
+            desc = data.get("description") or f"HTTP {resp.status_code}"
+            raise TelegramError(self._scrub(f"Telegram {method} failed: {desc}"))
+        return data.get("result")
+
+    def send_text(self, body: str) -> str:
+        result = self._call("sendMessage", chat_id=self.chat_id, text=body)
+        return str((result or {}).get("message_id", ""))
+
+    def get_updates(self, offset: int = 0, timeout: int = 0) -> list:
+        return self._call("getUpdates", offset=offset, timeout=timeout) or []
+
+    def bot_username(self) -> str:
+        return str((self._call("getMe") or {}).get("username", ""))
+
+
+class SplitGateway:
+    """Texts through one service (e.g. Telegram), calls through Twilio."""
+
+    def __init__(self, texter: TelegramTexter, caller: Gateway) -> None:
+        self.texter = texter
+        self.caller = caller
+
+    def send_sms(self, to: str, body: str) -> str:
+        # ``to`` is ignored: the Telegram chat already identifies the owner.
+        return self.texter.send_text(body)
+
+    def place_call(self, to: str, twiml: str) -> str:
+        return self.caller.place_call(to, twiml)

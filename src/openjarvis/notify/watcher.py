@@ -21,8 +21,16 @@ class TickReport:
     digested: int = 0
 
 
+def _poll_replies(notifier: Notifier) -> None:
+    try:
+        notifier.poll_telegram_replies()
+    except Exception as exc:
+        logger.warning("Reading Telegram replies failed: %s", exc)
+
+
 def tick(notifier: Notifier, ps: Optional[object] = None) -> TickReport:
     report = TickReport()
+    _poll_replies(notifier)
     for f in monitors.run_all(notifier.cfg.monitors, ps):
         report.findings.append(
             notifier.notify(f.title, f.message, urgency=f.urgency, dedupe_key=f.key)
@@ -36,8 +44,8 @@ def tick(notifier: Notifier, ps: Optional[object] = None) -> TickReport:
 def run_forever(notifier: Notifier, stop: Optional[threading.Event] = None) -> None:
     stop = stop or threading.Event()
     interval = max(30, int(notifier.cfg.check_interval_seconds))
-    # Escalations need finer timing than health checks.
-    step = min(interval, 60)
+    # Replies and escalations need finer timing than health checks.
+    step = 15
     elapsed = interval  # run health checks immediately
     while not stop.is_set():
         try:
@@ -45,6 +53,7 @@ def run_forever(notifier: Notifier, stop: Optional[threading.Event] = None) -> N
                 tick(notifier)
                 elapsed = 0
             else:
+                _poll_replies(notifier)
                 notifier.process_escalations()
         except Exception:
             logger.exception("notify watcher tick failed")
