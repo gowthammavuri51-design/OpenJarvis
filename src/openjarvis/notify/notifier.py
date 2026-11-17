@@ -178,7 +178,9 @@ class Notifier:
             if self._rate_limited(ts):
                 return NotifyResult("held", add(st.HELD).id, "hourly limit reached")
 
-        wants_call = critical or (urgency == "high" and not quiet)
+        wants_call = self.cfg.calls_enabled and (
+            critical or (urgency == "high" and not quiet)
+        )
         expects_ack = urgency in ("high", "critical") and self.cfg.can_receive_replies
         alert = add(st.SENT if expects_ack else st.DONE)
 
@@ -189,6 +191,9 @@ class Notifier:
         if texted:
             self.store.update(alert.id, sms_sent=1)
         called = self._call(alert, ts) if wants_call else False
+        if not wants_call and critical:
+            # Start the nudge timer from the first text.
+            self.store.update(alert.id, last_call_at=ts)
 
         if not texted and not called:
             self.store.update(alert.id, status=st.FAILED)
@@ -231,6 +236,112 @@ class Notifier:
             self.ack(a.id)
         return f"Acknowledged {len(open_alerts)} alert(s)."
 
+    # ---------------------------------------------------------------- reminders
+
+    def add_reminder(self, text: str, when_phrase: str) -> tuple[int, str]:
+        """Add a reminder from a phrase like 'at 6pm'. Returns (id, when)."""
+        from openjarvis.notify.reminders import parse_when
+
+        now = self._now()
+        when = parse_when(when_phrase, now)
+        return self._store_reminder(text, when, now)
+
+    def _store_reminder(self, text: str, when, now: datetime) -> tuple[int, str]:
+        from openjarvis.notify.reminders import describe
+
+        text = _clip(text.strip(), 300)
+        if not text:
+            raise ValueError("What should I remind you about?")
+        r = self.store.add_reminder(
+            created_at=now.timestamp(),
+            due_at=when.due.timestamp(),
+            text=text,
+            daily=when.daily,
+        )
+        return r.id, describe(when.due, now, when.daily)
+
+    def list_reminders(self) -> List[str]:
+        from openjarvis.notify.reminders import describe
+
+        now = self._now()
+        out = []
+        for r in self.store.pending_reminders():
+            due = datetime.fromtimestamp(r.due_at, tz=now.tzinfo)
+            out.append(f"#{r.id} {describe(due, now, bool(r.daily))}: {r.text}")
+        return out
+
+    def cancel_reminder(self, rid: int) -> bool:
+        r = self.store.get_reminder(rid)
+        if r is None or r.status != "pending":
+            return False
+        self.store.update_reminder(rid, status="cancelled")
+        return True
+
+    def send_due_reminders(self) -> int:
+        """Text every reminder that is due. Daily ones are rescheduled."""
+        from datetime import timedelta
+
+        now = self._now()
+        ts = now.timestamp()
+        sent = 0
+        for r in self.store.pending_reminders(due_before=ts):
+            if not self._sms(f"[Jarvis] Reminder: {r.text}", ts, False):
+                continue  # try again next cycle
+            sent += 1
+            if r.daily:
+                due = datetime.fromtimestamp(r.due_at, tz=now.tzinfo)
+                while due.timestamp() <= ts:
+                    due += timedelta(days=1)
+                self.store.update_reminder(r.id, due_at=due.timestamp())
+            else:
+                self.store.update_reminder(r.id, status="done")
+        return sent
+
+    def handle_owner_message(self, text: str) -> Optional[str]:
+        """Answer a message from the owner (Telegram). Returns the reply."""
+        from openjarvis.notify.reminders import parse_reminder_request
+
+        body = (text or "").strip()
+        if not body:
+            return None
+        ack = self.handle_ack_text(body)
+        if ack:
+            return ack
+        low = body.lower().rstrip(".!?")
+        if low in ("/start", "ok", "okay", "thanks", "thank you"):
+            return None
+        if low in ("reminders", "/reminders", "list", "my reminders"):
+            items = self.list_reminders()
+            return (
+                "\n".join(["Your reminders:", *items])
+                if items
+                else ("You have no reminders.")
+            )
+        m = re.match(r"^/?(?:cancel|delete|remove)\s+#?(\d+)$", low)
+        if m:
+            rid = int(m.group(1))
+            return (
+                f"Reminder #{rid} cancelled."
+                if self.cancel_reminder(rid)
+                else f"No reminder #{rid}."
+            )
+        try:
+            parsed = parse_reminder_request(body, self._now())
+        except ValueError as exc:
+            return str(exc)
+        if parsed:
+            when, what = parsed
+            rid, desc = self._store_reminder(what, when, self._now())
+            return f"OK, I'll remind you {desc}: {what} (#{rid})"
+        return (
+            "I can set reminders and track alerts. Try:\n"
+            "- remind me in 30 min to drink water\n"
+            "- remind me at 6pm to call mom\n"
+            "- remind me every day at 8am to take medicine\n"
+            "- reminders (list) / cancel 3\n"
+            "- OK 12 (acknowledge alert 12)"
+        )
+
     def poll_telegram_replies(self) -> int:
         """Read new Telegram messages and acknowledge "OK" replies.
 
@@ -249,7 +360,7 @@ class Notifier:
             chat_id = str((msg.get("chat") or {}).get("id", ""))
             if chat_id != texter.chat_id:
                 continue
-            reply = self.handle_ack_text(str(msg.get("text") or ""))
+            reply = self.handle_owner_message(str(msg.get("text") or ""))
             if reply:
                 handled += 1
                 try:
@@ -298,6 +409,17 @@ class Notifier:
                 )
                 continue
             if now - a.last_call_at < wait:
+                continue
+            if not self.cfg.calls_enabled:
+                # Calls are off: nudge again by text until acknowledged.
+                self.store.update(a.id, calls=a.calls + 1, last_call_at=now)
+                self._sms(
+                    f"[Jarvis] URGENT, still waiting: {a.title}"
+                    + (f"\n{a.message}" if a.message else "")
+                    + f"\nReply OK {a.id} to acknowledge.",
+                    now,
+                    True,
+                )
                 continue
             if self._call(a, now, retry=True):
                 recalled.append(a.id)

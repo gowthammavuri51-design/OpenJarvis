@@ -48,6 +48,8 @@ def setup() -> None:
         click.echo(f"Texts via:     Telegram (chat {chat})")
     else:
         click.echo("Texts via:     SMS (run `jarvis notify telegram` to use Telegram)")
+    calls = "on" if cfg.calls_enabled else "off (texts only)"
+    click.echo(f"Phone calls:   {calls}")
     click.echo("")
     if not problems:
         click.echo("Ready. Try: jarvis notify test")
@@ -114,6 +116,39 @@ def send(title: str, message: str, urgency: str) -> None:
     """Send an alert through the normal routing rules."""
     r = _notifier().notify(title, message, urgency=urgency)
     click.echo(f"{r.action} (alert {r.alert_id}) {r.detail}".strip())
+
+
+@notify.command("remind")
+@click.argument("text")
+@click.option(
+    "--when",
+    "when",
+    required=True,
+    help="e.g. 'in 30 min', 'at 6pm', 'tomorrow at 9am', 'every day at 8am'.",
+)
+def remind(text: str, when: str) -> None:
+    """Set a reminder that Jarvis texts you (needs `notify watch` running)."""
+    try:
+        rid, desc = _notifier(require_ready=False).add_reminder(text, when)
+    except ValueError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(1)
+    click.echo(f"Reminder #{rid} set for {desc}: {text}")
+
+
+@notify.command("reminders")
+def reminders() -> None:
+    """List upcoming reminders."""
+    items = _notifier(require_ready=False).list_reminders()
+    click.echo("\n".join(items) if items else "No reminders.")
+
+
+@notify.command("cancel")
+@click.argument("reminder_id", type=int)
+def cancel(reminder_id: int) -> None:
+    """Cancel a reminder."""
+    ok = _notifier(require_ready=False).cancel_reminder(reminder_id)
+    click.echo("Cancelled." if ok else "No pending reminder with that id.")
 
 
 @notify.command("status")

@@ -56,7 +56,29 @@ CREATE TABLE IF NOT EXISTS contacts (
     critical INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS reminders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at REAL NOT NULL,
+    due_at REAL NOT NULL,
+    text TEXT NOT NULL,
+    daily INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pending'
+);
+CREATE INDEX IF NOT EXISTS reminders_due ON reminders(status, due_at);
 """
+
+
+@dataclass
+class Reminder:
+    id: int
+    created_at: float
+    due_at: float
+    text: str
+    daily: int
+    status: str
+
+
+_RCOLS = "id, created_at, due_at, text, daily, status"
 
 _COLS = (
     "id, created_at, urgency, title, message, dedupe_key, status, "
@@ -168,6 +190,51 @@ class AlertStore:
             q += " AND critical = 0"
         with self._lock:
             return int(self._db.execute(q, (since,)).fetchone()[0])
+
+    # -- reminders --------------------------------------------------------
+
+    def add_reminder(
+        self, *, created_at: float, due_at: float, text: str, daily: bool
+    ) -> Reminder:
+        with self._lock:
+            cur = self._db.execute(
+                "INSERT INTO reminders (created_at, due_at, text, daily) "
+                "VALUES (?, ?, ?, ?)",
+                (created_at, due_at, text, int(daily)),
+            )
+            self._db.commit()
+            rid = int(cur.lastrowid)
+        reminder = self.get_reminder(rid)
+        assert reminder is not None
+        return reminder
+
+    def get_reminder(self, rid: int) -> Optional[Reminder]:
+        with self._lock:
+            row = self._db.execute(
+                f"SELECT {_RCOLS} FROM reminders WHERE id = ?", (rid,)
+            ).fetchone()
+        return Reminder(*row) if row else None
+
+    def pending_reminders(self, due_before: Optional[float] = None) -> List[Reminder]:
+        q = f"SELECT {_RCOLS} FROM reminders WHERE status = 'pending'"
+        args: tuple = ()
+        if due_before is not None:
+            q += " AND due_at <= ?"
+            args = (due_before,)
+        with self._lock:
+            rows = self._db.execute(q + " ORDER BY due_at, id", args).fetchall()
+        return [Reminder(*r) for r in rows]
+
+    def update_reminder(self, rid: int, **fields: object) -> None:
+        allowed = {"due_at", "status"}
+        if set(fields) - allowed:
+            raise ValueError(f"cannot update {set(fields) - allowed}")
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        with self._lock:
+            self._db.execute(
+                f"UPDATE reminders SET {sets} WHERE id = ?", (*fields.values(), rid)
+            )
+            self._db.commit()
 
     # -- meta -------------------------------------------------------------
 

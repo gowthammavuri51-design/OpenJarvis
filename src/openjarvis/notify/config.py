@@ -93,6 +93,9 @@ class NotifyConfig:
     # Where text messages go: "sms" (Twilio), "telegram", or "auto"
     # (Telegram when a bot token and chat id are configured, else SMS).
     text_channel: str = "auto"
+    # Phone calls for high/critical alerts. With calls off, critical alerts
+    # repeat as texts until acknowledged.
+    calls_enabled: bool = True
     telegram_chat_id: str = ""
     monitors: MonitorConfig = field(default_factory=MonitorConfig)
 
@@ -133,14 +136,15 @@ class NotifyConfig:
     def problems(self) -> List[str]:
         """Return human-readable setup problems (empty when ready)."""
         out: List[str] = []
-        if not is_valid_phone(self.owner_phone):
+        needs_twilio = self.calls_enabled or self.texts_via == "sms"
+        if needs_twilio and not is_valid_phone(self.owner_phone):
             out.append(
                 "[notify].owner_phone is missing or not in +countrycode format "
                 "(e.g. +15551234567)"
             )
-        if not self.account_sid or not self.auth_token:
+        if needs_twilio and (not self.account_sid or not self.auth_token):
             out.append("Twilio TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN not set")
-        if not is_valid_phone(self.from_phone):
+        if needs_twilio and not is_valid_phone(self.from_phone):
             out.append("Twilio TWILIO_PHONE_NUMBER is missing or invalid")
         if self.texts_via not in ("sms", "telegram"):
             out.append("[notify].text_channel must be 'sms', 'telegram' or 'auto'")

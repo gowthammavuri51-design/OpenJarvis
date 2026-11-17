@@ -26,6 +26,10 @@ def _poll_replies(notifier: Notifier) -> None:
         notifier.poll_telegram_replies()
     except Exception as exc:
         logger.warning("Reading Telegram replies failed: %s", exc)
+    try:
+        notifier.send_due_reminders()
+    except Exception as exc:
+        logger.warning("Sending reminders failed: %s", exc)
 
 
 def tick(notifier: Notifier, ps: Optional[object] = None) -> TickReport:

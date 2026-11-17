@@ -72,7 +72,7 @@ memory_percent = 95
 watch_processes = ["OneDrive.exe"]   # alert if any of these stop running
 
 [tools]
-enabled = ["notify_user", "shell_exec", "file_read", "web_search"]
+enabled = ["notify_user", "set_reminder", "shell_exec", "file_read", "web_search"]
 ```
 
 Install the Twilio library: `uv sync --extra channel-twilio`.
@@ -135,6 +135,43 @@ To acknowledge alerts from your phone, Twilio must be able to reach Jarvis:
 All webhooks verify Twilio's signature with your Auth Token and reject
 anything else. Without `public_url`, alerts still work — Jarvis just can't
 know you've seen them, so critical alerts are called only once.
+
+## Texts only (no calls)
+
+Until your Twilio account can place calls, turn calls off:
+
+```toml
+[notify]
+calls_enabled = false
+```
+
+High alerts then arrive as texts, and critical alerts are re-sent every
+`escalate_after_minutes` (up to `max_call_attempts` times) until you reply
+**OK**. With Telegram texts and calls off, Twilio is not needed at all.
+
+## Reminders
+
+Message your Telegram bot (the watcher must be running):
+
+| You send | Jarvis does |
+|---|---|
+| `remind me in 30 min to drink water` | one reminder in 30 minutes |
+| `remind me at 6pm to call mom` | today at 18:00 (tomorrow if already past) |
+| `remind me to pay rent tomorrow at 9am` | tomorrow 09:00 |
+| `remind me every day at 8am to take medicine` | every day at 08:00 |
+| `reminders` | lists upcoming reminders |
+| `cancel 3` | cancels reminder #3 |
+
+Or from the terminal:
+
+```bash
+jarvis notify remind "call mom" --when "at 6pm"
+jarvis notify reminders
+jarvis notify cancel 3
+```
+
+With `set_reminder` in `[tools].enabled`, you can also just ask the
+assistant: *"remind me tomorrow at 9am to pay the electricity bill"*.
 
 ## Let the assistant reach you
 

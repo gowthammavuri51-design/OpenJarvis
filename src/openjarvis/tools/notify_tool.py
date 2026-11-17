@@ -112,3 +112,60 @@ class NotifyUserTool(BaseTool):
             success=result.action != "failed",
             metadata={"alert_id": result.alert_id, "action": result.action},
         )
+
+
+@ToolRegistry.register("set_reminder")
+class SetReminderTool(BaseTool):
+    """Schedule a reminder that is texted to the owner."""
+
+    tool_id = "set_reminder"
+    is_local = True
+
+    def __init__(self, notifier: Optional[Any] = None) -> None:
+        self._notifier = notifier
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="set_reminder",
+            description=(
+                "Set a reminder that is sent to the user's phone at a given "
+                "time. Use when the user asks to be reminded of something."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "What to remind about, e.g. 'call mom'.",
+                    },
+                    "when": {
+                        "type": "string",
+                        "description": (
+                            "Exactly one of these forms: 'in 30 min', 'in 2 hours', "
+                            "'at 6pm', 'at 18:30', 'tomorrow at 9am', "
+                            "'every day at 8am'."
+                        ),
+                    },
+                },
+                "required": ["text", "when"],
+            },
+            category="communication",
+        )
+
+    def execute(self, **params: Any) -> ToolResult:
+        if self._notifier is None:
+            from openjarvis.notify import build_default_notifier
+
+            self._notifier = build_default_notifier()
+        try:
+            rid, desc = self._notifier.add_reminder(
+                str(params.get("text") or ""), str(params.get("when") or "")
+            )
+        except ValueError as exc:
+            return ToolResult("set_reminder", str(exc), success=False)
+        return ToolResult(
+            "set_reminder",
+            f"Reminder #{rid} set for {desc}.",
+            metadata={"reminder_id": rid},
+        )
