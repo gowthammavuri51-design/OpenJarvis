@@ -506,3 +506,44 @@ class TestOllamaStreamHttpErrorMapping:
         # First request had tools (400), second retried without them (200).
         assert calls == [True, False]
         assert any(c.content == "recovered" for c in chunks)
+
+
+class TestOllamaHostNormalization:
+    """Hosts that used to make a running Ollama look unreachable on Windows."""
+
+    @pytest.mark.parametrize(
+        ("given", "expected"),
+        [
+            ("http://localhost:11434", "http://127.0.0.1:11434"),
+            ("http://localhost:11434/", "http://127.0.0.1:11434"),
+            ("localhost", "http://127.0.0.1:11434"),
+            ("0.0.0.0", "http://127.0.0.1:11434"),
+            ("0.0.0.0:8080", "http://127.0.0.1:8080"),
+            ("http://[::]:11434", "http://127.0.0.1:11434"),
+            ("192.168.1.50:11434", "http://192.168.1.50:11434"),
+            ("https://ollama.example.com", "https://ollama.example.com:11434"),
+            ("http://gpu-box:9000/ollama/", "http://gpu-box:9000/ollama"),
+            ("http://[fe80::1]:11434", "http://[fe80::1]:11434"),
+        ],
+    )
+    def test_normalize(self, given, expected):
+        from openjarvis.engine.ollama import normalize_ollama_host
+
+        assert normalize_ollama_host(given) == expected
+
+    def test_env_host_is_normalized(self, monkeypatch):
+        monkeypatch.setenv("OLLAMA_HOST", "0.0.0.0")
+        engine = OllamaEngine()
+        assert engine._host == "http://127.0.0.1:11434"
+        engine.close()
+
+    def test_local_ollama_ignores_system_proxy(self, monkeypatch):
+        monkeypatch.delenv("OLLAMA_HOST", raising=False)
+        engine = OllamaEngine()
+        assert engine._client._trust_env is False
+        engine.close()
+
+    def test_remote_ollama_respects_system_proxy(self):
+        engine = OllamaEngine(host="http://192.168.1.50:11434")
+        assert engine._client._trust_env is True
+        engine.close()

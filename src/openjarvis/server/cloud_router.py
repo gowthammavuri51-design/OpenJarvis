@@ -306,7 +306,9 @@ async def _stream_google(
 
 
 def _ollama_host() -> str:
-    return os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
+    from openjarvis.engine.ollama import normalize_ollama_host
+
+    return normalize_ollama_host(os.environ.get("OLLAMA_HOST", ""))
 
 
 async def stream_local(

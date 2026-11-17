@@ -7,6 +7,7 @@ import logging
 import os
 from collections.abc import AsyncIterator, Sequence
 from typing import Any, Dict, List
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -113,7 +114,7 @@ class OllamaEngine(AsyncHTTPEngineMixin, InferenceEngine):
     # shared ``_raise_stream_http_error`` keeps its default (no
     # ``EngineContextLengthError`` branch, unlike the OpenAI-compat engines).
 
-    _DEFAULT_HOST = "http://localhost:11434"
+    _DEFAULT_HOST = "http://127.0.0.1:11434"
 
     def __init__(
         self,
@@ -125,7 +126,9 @@ class OllamaEngine(AsyncHTTPEngineMixin, InferenceEngine):
         if host is None:
             env_host = os.environ.get("OLLAMA_HOST")
             host = env_host or self._DEFAULT_HOST
-        self._host = host.rstrip("/")
+        self._host = normalize_ollama_host(host)
+        # A local Ollama must never be reached through a system HTTP proxy.
+        self._trust_env = not _is_loopback_host(self._host)
         # Used by the shared async streaming plumbing (AsyncHTTPEngineMixin) so a
         # wedged token read is bounded by ``timeout`` instead of hanging the
         # single event loop for the httpx default.
@@ -134,7 +137,9 @@ class OllamaEngine(AsyncHTTPEngineMixin, InferenceEngine):
         # the async stream path with no real Ollama server. ``None`` in production so
         # httpx uses its default networking.
         self._async_transport: httpx.AsyncBaseTransport | None = None
-        self._client = httpx.Client(base_url=self._host, timeout=timeout)
+        self._client = httpx.Client(
+            base_url=self._host, timeout=timeout, trust_env=self._trust_env
+        )
         # Last stream usage — captured from Ollama's final chunk
         self._last_stream_usage: Dict[str, int] = {}
 
@@ -552,3 +557,36 @@ class OllamaEngine(AsyncHTTPEngineMixin, InferenceEngine):
 
 
 __all__ = ["OllamaEngine"]
+
+
+_LOOPBACK_ALIASES = {"localhost", "0.0.0.0", "::", "::1", "127.0.0.1"}
+
+
+def normalize_ollama_host(host: str) -> str:
+    """Turn any Ollama host spelling into a connectable base URL.
+
+    * ``OLLAMA_HOST`` may be a bare ``host[:port]`` (as Ollama itself accepts),
+      so a missing scheme gets ``http://`` and a missing port gets ``11434``.
+    * ``0.0.0.0`` / ``::`` are *listen* addresses, not connectable ones.
+    * ``localhost`` is pinned to ``127.0.0.1``: on Windows it resolves to
+      ``::1`` first, and a refused IPv6 connect takes ~2 s there, longer than
+      the health-check timeout, so a running Ollama looked unreachable.
+    """
+    raw = (host or "").strip().rstrip("/")
+    if not raw:
+        raw = OllamaEngine._DEFAULT_HOST
+    if "://" not in raw:
+        raw = f"http://{raw}"
+    parsed = urlsplit(raw)
+    hostname = (parsed.hostname or "").lower()
+    if hostname in _LOOPBACK_ALIASES:
+        hostname = "127.0.0.1"
+    elif ":" in hostname:
+        hostname = f"[{hostname}]"
+    port = parsed.port or 11434
+    path = parsed.path.rstrip("/")
+    return urlunsplit((parsed.scheme or "http", f"{hostname}:{port}", path, "", ""))
+
+
+def _is_loopback_host(url: str) -> bool:
+    return (urlsplit(url).hostname or "") in {"127.0.0.1", "::1"}

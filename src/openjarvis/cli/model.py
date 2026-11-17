@@ -233,11 +233,11 @@ def pull(model_name: str, engine: str | None) -> None:
     engine = engine or config.engine.default or "ollama"
 
     if engine == "ollama":
-        host = (
-            config.engine.ollama_host
-            or os.environ.get("OLLAMA_HOST")
-            or "http://localhost:11434"
-        ).rstrip("/")
+        from openjarvis.engine.ollama import normalize_ollama_host
+
+        host = normalize_ollama_host(
+            config.engine.ollama_host or os.environ.get("OLLAMA_HOST") or ""
+        )
         if not ollama_pull(host, model_name, console):
             sys.exit(1)
     elif engine in ("llamacpp", "mlx"):

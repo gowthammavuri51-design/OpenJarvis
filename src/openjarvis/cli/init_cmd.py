@@ -46,7 +46,7 @@ def _detect_running_engines() -> list[str]:
     import httpx
 
     _PROBES: dict[str, str] = {
-        "ollama": "http://localhost:11434/api/tags",
+        "ollama": "http://127.0.0.1:11434/api/tags",
         "vllm": "http://localhost:8000/v1/models",
         "sglang": "http://localhost:30000/v1/models",
         "llamacpp": "http://localhost:8080/v1/models",
@@ -199,7 +199,9 @@ def _do_download(engine: str, model: str, spec, console: Console) -> None:
     import os
 
     if engine == "ollama":
-        host = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
+        from openjarvis.engine.ollama import normalize_ollama_host
+
+        host = normalize_ollama_host(os.environ.get("OLLAMA_HOST", ""))
         ollama_pull(host, model, console)
     elif engine == "llamacpp":
         repo = spec.metadata.get("hf_repo", "")
