@@ -226,8 +226,8 @@ Install **MacroDroid** from the Play Store, then run
 
 * **Laptop → phone** (works anywhere with internet): a MacroDroid macro
   with a *Webhook (URL)* trigger named `jarvis` receives
-  `action=ring|alarm|ringer|timer` (plus `hour`, `minute`, `mode`,
-  `seconds`). Messages: `find my phone`, `set alarm 6:30am`,
+  `action=ring|alarm|silent|vibrate|normal|timer` (plus `hour`,
+  `minute`, `seconds`). Messages: `find my phone`, `set alarm 6:30am`,
   `silent mode` / `vibrate mode` / `normal mode`, `timer 10 min`.
 * **Phone → laptop** (same Wi-Fi only, nothing leaves your network): a
   macro calls `http://<laptop-ip>:8765/phone?token=…&type=missed_call&from=…`

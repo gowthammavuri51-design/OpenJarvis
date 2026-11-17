@@ -90,7 +90,8 @@ def parse_phone_command(text: str) -> Optional[Tuple[Dict[str, str], str]]:
     if m:
         mode = m.group("a") or m.group("b")
         mode = "normal" if mode == "ring" else mode
-        return {"action": "ringer", "mode": mode}, f"Phone set to {mode} mode."
+        # One word per command keeps the MacroDroid macro simple.
+        return {"action": mode}, f"Phone set to {mode} mode."
     m = _RE_TIMER.match(t)
     if m:
         unit = m.group("u")[0]
